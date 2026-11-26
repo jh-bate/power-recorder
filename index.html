@@ -357,7 +357,7 @@
         defs[local].forEach(([, type], i) => put(type, values[i]));
       }
 
-      const L = { FILE_ID: 0, EVENT: 1, RECORD: 2, LAP: 3, SESSION: 4, ACTIVITY: 5 };
+      const L = { FILE_ID: 0, EVENT: 1, RECORD: 2, LAP: 3, SESSION: 4, ACTIVITY: 5, DEVICE: 6 };
 
       // ---- stats ----
       const n = records.length;
@@ -371,6 +371,7 @@
       const tMs = timerMs ?? elapsedMs;
       const startT = toFitTime(startMs), endT = toFitTime(endMs);
 
+      const tzSec = -new Date(startMs).getTimezoneOffset() * 60; // local = UTC + offset
       // ---- file_id ----
       define(L.FILE_ID, 0, [[0, BT.ENUM], [1, BT.U16], [2, BT.U16], [3, BT.U32Z], [4, BT.U32]]);
       data(L.FILE_ID, [4 /*activity*/, 255 /*development*/, 0, 1, startT]);
@@ -379,6 +380,8 @@
       define(L.EVENT, 21, [[253, BT.U32], [0, BT.ENUM], [1, BT.ENUM]]);
       define(L.RECORD, 20, [[253, BT.U32], [7, BT.U16], [3, BT.U8]]);
       data(L.EVENT, [startT, 0 /*timer*/, 0 /*start*/]);
+      define(L.DEVICE, 23, [[253, BT.U32], [0, BT.U8], [2, BT.U16], [3, BT.U32Z], [4, BT.U16]]);
+      data(L.DEVICE, [startT, 0 /*creator*/, 255, 1, 0]);
       let ei = 0;
       for (const r of records) {
         while (ei < events.length && events[ei].t <= r.t) {
@@ -401,8 +404,8 @@
       data(L.SESSION, [endT, startT, elapsedMs, tMs, avgCad, maxCad, avgPower, maxPower, sport, subSport, 0, 1, 8 /*session*/, 1, 0]);
 
       // ---- activity ----
-      define(L.ACTIVITY, 34, [[253, BT.U32], [0, BT.U32], [1, BT.U16], [2, BT.ENUM], [3, BT.ENUM], [4, BT.ENUM]]);
-      data(L.ACTIVITY, [endT, tMs, 1, 0 /*manual*/, 26 /*activity*/, 1 /*stop*/]);
+      define(L.ACTIVITY, 34, [[253, BT.U32], [0, BT.U32], [1, BT.U16], [2, BT.ENUM], [3, BT.ENUM], [4, BT.ENUM], [5, BT.U32]]);
+      data(L.ACTIVITY, [endT, tMs, 1, 0 /*manual*/, 26 /*activity*/, 1 /*stop*/, endT + tzSec]);
 
       // ---- header + CRCs ----
       const hdr = [];
@@ -580,7 +583,7 @@
         id: state.startMs, startMs: state.startMs, endMs, timerMs: state.timerMs, sport, subSport,
         events: state.events, records: state.records.map(r => [r.t, r.power, r.cadence])
       });
-      $('info').textContent = 'Session saved on this device. Use Share / Save below to export it.';
+      $('info').textContent = 'Session saved on this device. Tap Export below to save or share it.';
     }
 
     // ---- Saved sessions (last 2 kept on this device) ----
@@ -633,8 +636,7 @@
         try { await navigator.share({ files: [file], title: file.name }); return; }
         catch (e) { if (e.name === 'AbortError') return; }
       }
-      alert('Sharing is not supported in this browser, downloading instead.');
-      downloadSession(id);
+      downloadSession(id); // browser can't share files: fall back to a normal download
     }
     function downloadSession(id) {
       const s = getSession(id); if (!s) return;
@@ -660,7 +662,7 @@
       <div class="note">${fmtTime(s.timerMs)} · avg ${avg} W · max ${max} W · ${s.records.length} samples</div>
       <div class="row"></div>`;
         const row = el.querySelector('.row');
-        for (const [label, fn, cls] of [['Share / Save', shareSession, 'primary'], ['Download', downloadSession, ''], ['Delete', deleteSession, 'danger']]) {
+        for (const [label, fn, cls] of [['Export', shareSession, 'primary'], ['Delete', deleteSession, 'danger']]) {
           const b = document.createElement('button'); b.textContent = label; if (cls) b.className = cls;
           b.onclick = () => fn(s.id); row.appendChild(b);
         }
