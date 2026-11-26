@@ -7,72 +7,183 @@
   <title>Power Recorder – BLE to FIT</title>
   <style>
     :root {
-      --bg: #14161a;
-      --card: #1e2127;
-      --fg: #e8eaed;
-      --mut: #8b929c;
-      --acc: #4cc2ff;
-      --ok: #3ecf8e;
+      --bg: #0e1013;
+      --card: #181b20;
+      --fg: #f2f4f7;
+      --mut: #7d8590;
+      --line: #262b33;
+      --pow: #4cc2ff;
+      --cad: #5ee0a0;
       --bad: #ff5d5d;
     }
 
     * {
       box-sizing: border-box;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    [hidden] {
+      display: none !important;
+    }
+
+    html,
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--fg);
     }
 
     body {
-      margin: 0;
-      padding: 16px;
-      background: var(--bg);
-      color: var(--fg);
-      font: 15px/1.4 system-ui, sans-serif;
-      max-width: 760px;
-      margin-inline: auto;
-    }
-
-    h1 {
-      font-size: 18px;
-      margin: 0 0 4px;
-    }
-
-    .sub {
-      color: var(--mut);
-      margin-bottom: 14px;
-      font-size: 13px;
-    }
-
-    .row {
+      font: 16px/1.35 system-ui, -apple-system, sans-serif;
+      min-height: 100vh;
+      min-height: 100dvh;
       display: flex;
-      flex-wrap: wrap;
+      flex-direction: column;
+      padding: max(10px, env(safe-area-inset-top)) 14px max(14px, env(safe-area-inset-bottom));
+      max-width: 900px;
+      margin: 0 auto;
+    }
+
+    .top {
+      display: flex;
+      align-items: center;
       gap: 8px;
+      color: var(--mut);
+      font-size: 14px;
+      min-height: 24px;
+    }
+
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #444b55;
+      flex: none;
+    }
+
+    .dot.on {
+      background: var(--cad);
+    }
+
+    .dot.rec {
+      background: var(--bad);
+      animation: p 1.2s infinite;
+    }
+
+    @keyframes p {
+      50% {
+        opacity: .25;
+      }
+    }
+
+    .hero {
+      display: grid;
+      gap: 0;
+      margin: 6px 0 2px;
+    }
+
+    .metric {
+      display: flex;
+      align-items: baseline;
+      justify-content: center;
+      gap: 10px;
+    }
+
+    .num {
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      line-height: 1;
+      letter-spacing: -.03em;
+    }
+
+    .unit {
+      color: var(--mut);
+      font-size: clamp(16px, 4.5vw, 26px);
+    }
+
+    .power .num {
+      font-size: clamp(88px, 34vw, 230px);
+      color: var(--pow);
+    }
+
+    .cad .num {
+      font-size: clamp(60px, 22vw, 150px);
+      color: var(--cad);
+    }
+
+    .minor {
+      display: flex;
+      justify-content: center;
+      gap: 36px;
+      color: var(--mut);
+      margin: 4px 0 10px;
+    }
+
+    .minor .k {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      margin-right: 8px;
+    }
+
+    .minor .v {
+      font-size: 20px;
+      color: var(--fg);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .chartwrap {
+      position: relative;
+      flex: 1 1 120px;
+      min-height: 120px;
+      max-height: 260px;
       margin-bottom: 12px;
+    }
+
+    canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    .controls {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .controls button {
+      flex: 1;
+      height: 64px;
+      font-size: 20px;
+      font-weight: 600;
     }
 
     button,
     select {
       background: var(--card);
       color: var(--fg);
-      border: 1px solid #333a44;
-      border-radius: 8px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
       padding: 10px 14px;
       font-size: 15px;
-      cursor: pointer;
-    }
-
-    button:hover:not(:disabled) {
-      border-color: var(--acc);
+      font-family: inherit;
     }
 
     button:disabled {
       opacity: .4;
-      cursor: default;
     }
 
     button.primary {
-      background: var(--acc);
+      background: var(--pow);
       color: #04141f;
-      border-color: var(--acc);
-      font-weight: 600;
+      border-color: var(--pow);
+    }
+
+    button.go {
+      background: var(--cad);
+      color: #032014;
+      border-color: var(--cad);
     }
 
     button.danger {
@@ -81,89 +192,28 @@
       border-color: var(--bad);
     }
 
-    .tiles {
-      display: grid;
-      grid-template-columns: repeat(2, 1fr);
-      gap: 10px;
-      margin-bottom: 12px;
+    details {
+      margin-top: 6px;
     }
 
-    @media (min-width:560px) {
-      .tiles {
-        grid-template-columns: repeat(3, 1fr);
-      }
-    }
-
-    .tile {
-      background: var(--card);
-      border-radius: 12px;
-      padding: 12px 14px;
-    }
-
-    .tile .l {
+    summary {
       color: var(--mut);
-      font-size: 12px;
-      text-transform: uppercase;
-      letter-spacing: .05em;
-    }
-
-    .tile .v {
-      font-size: 40px;
-      font-weight: 700;
-      font-variant-numeric: tabular-nums;
-    }
-
-    .tile .u {
-      font-size: 14px;
-      color: var(--mut);
-      font-weight: 400;
-      margin-left: 4px;
-    }
-
-    .status {
-      padding: 8px 12px;
-      border-radius: 8px;
-      background: var(--card);
-      margin-bottom: 12px;
+      padding: 10px 0;
+      cursor: pointer;
       font-size: 14px;
     }
 
-    .dot {
-      display: inline-block;
-      width: 10px;
-      height: 10px;
-      border-radius: 50%;
-      background: var(--mut);
-      margin-right: 8px;
-    }
-
-    .dot.on {
-      background: var(--ok);
-    }
-
-    .dot.rec {
-      background: var(--bad);
-      animation: p 1s infinite;
-    }
-
-    @keyframes p {
-      50% {
-        opacity: .3;
-      }
-    }
-
-    canvas {
-      width: 100%;
-      height: 140px;
-      background: var(--card);
-      border-radius: 12px;
-      display: block;
-      margin-bottom: 12px;
+    .row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 10px;
+      align-items: center;
     }
 
     .note {
       color: var(--mut);
-      font-size: 12.5px;
+      font-size: 13px;
     }
 
     .sess {
@@ -181,67 +231,87 @@
       color: var(--mut);
       font-size: 13px;
     }
+
+    @media (orientation:landscape) and (max-height:520px) {
+      body {
+        padding-top: 6px;
+      }
+
+      .hero {
+        grid-template-columns: 1.25fr 1fr;
+        align-items: center;
+        margin: 0;
+      }
+
+      .power .num {
+        font-size: min(22vw, 34vh);
+      }
+
+      .cad .num {
+        font-size: min(15vw, 26vh);
+      }
+
+      .minor {
+        margin: 0 0 6px;
+      }
+
+      .chartwrap {
+        min-height: 70px;
+        max-height: none;
+        margin-bottom: 8px;
+      }
+
+      .controls {
+        margin-bottom: 6px;
+      }
+
+      .controls button {
+        height: 46px;
+        font-size: 17px;
+      }
+    }
   </style>
 </head>
 
 <body>
-  <h1>Power Recorder</h1>
-  <div class="sub">Bluetooth power meter → 1 Hz recording → Garmin‑compatible .FIT file</div>
+  <div class="top"><span class="dot" id="dot"></span><span id="status">Not connected</span></div>
 
-  <div class="status"><span class="dot" id="dot"></span><span id="status">Not connected</span></div>
+  <section class="hero">
+    <div class="metric power"><span class="num" id="pw">–</span><span class="unit">W</span></div>
+    <div class="metric cad"><span class="num" id="cd">–</span><span class="unit">rpm</span></div>
+  </section>
 
-  <div class="row">
-    <button id="btnConnect" class="primary">Connect power meter (BLE)</button>
-    <button id="btnSim">Simulate sensor</button>
-    <button id="btnDisc" disabled>Disconnect</button>
+  <section class="minor">
+    <div><span class="k">Time</span><span class="v" id="el">0:00</span></div>
+    <div><span class="k">Max</span><span class="v"><span id="mx">–</span> W</span></div>
+  </section>
+
+  <div class="chartwrap"><canvas id="chart"></canvas></div>
+
+  <div id="connectBar" class="controls"><button id="btnConnect" class="primary">Connect power meter</button></div>
+  <div class="controls"><button id="btnStart" class="go" hidden>Start</button></div>
+  <div id="recBar" class="controls" hidden>
+    <button id="btnPause">Pause</button>
+    <button id="btnStop" class="danger">Stop &amp; save</button>
   </div>
+  <div class="note" id="info"></div>
 
-  <div class="tiles">
-    <div class="tile">
-      <div class="l">Power</div>
-      <div class="v"><span id="pw">–</span><span class="u">W</span></div>
+  <details>
+    <summary>Saved rides &amp; tools</summary>
+    <div id="sessions"></div>
+    <div class="row">
+      <label for="sport">Activity type:</label>
+      <select id="sport">
+        <option value="2,13">Track cycling</option>
+        <option value="2,6">Indoor cycling</option>
+        <option value="2,0">Cycling (generic)</option>
+      </select>
     </div>
-    <div class="tile">
-      <div class="l">Cadence</div>
-      <div class="v"><span id="cd">–</span><span class="u">rpm</span></div>
+    <div class="row">
+      <button id="btnSim">Simulate sensor</button>
+      <button id="btnDisc" disabled>Disconnect</button>
     </div>
-    <div class="tile">
-      <div class="l">Elapsed</div>
-      <div class="v" id="el">0:00</div>
-    </div>
-    <div class="tile">
-      <div class="l">3 s avg</div>
-      <div class="v"><span id="a3">–</span><span class="u">W</span></div>
-    </div>
-    <div class="tile">
-      <div class="l">Max power</div>
-      <div class="v"><span id="mx">–</span><span class="u">W</span></div>
-    </div>
-    <div class="tile">
-      <div class="l">Avg power</div>
-      <div class="v"><span id="av">–</span><span class="u">W</span></div>
-    </div>
-  </div>
-
-  <canvas id="chart" width="1400" height="280"></canvas>
-
-  <div class="row">
-    <button id="btnStart" disabled class="primary">Start</button>
-    <button id="btnPause" disabled>Pause</button>
-    <button id="btnStop" disabled class="danger">Stop &amp; export .FIT</button>
-  </div>
-  <div class="row">
-    <label for="sport">Activity type in Garmin Connect:&nbsp;</label>
-    <select id="sport">
-      <option value="2,13">Track cycling</option>
-      <option value="2,6">Indoor cycling</option>
-      <option value="2,0">Cycling (generic)</option>
-    </select>
-  </div>
-  <div class="note" id="info">Samples recorded: 0.</div>
-
-  <h2 style="font-size:16px;margin:20px 0 8px">Saved sessions</h2>
-  <div id="sessions"></div>
+  </details>
 
   <script>
     // ============================================================
@@ -407,10 +477,10 @@
 
     function updateButtons() {
       const c = connected();
-      $('btnConnect').disabled = c; $('btnSim').disabled = c; $('btnDisc').disabled = !c;
-      $('btnStart').disabled = !c || state.recording;
-      $('btnPause').disabled = !state.recording;
-      $('btnStop').disabled = !state.recording;
+      $('connectBar').hidden = c;
+      $('btnStart').hidden = !c || state.recording;
+      $('recBar').hidden = !state.recording;
+      $('btnSim').disabled = c; $('btnDisc').disabled = !c;
       $('btnPause').textContent = state.paused ? 'Resume' : 'Pause';
     }
 
@@ -599,43 +669,53 @@
     }
 
     // ---- UI refresh ----
+    const WINDOW_MS = 120000; // graph shows the last 2 minutes of power
+    function niceMax(v) { const step = v > 600 ? 200 : 100; return Math.max(300, Math.ceil(v / step) * step); }
     function draw() {
-      const c = $('chart'), g = c.getContext('2d'), W = c.width, H = c.height;
-      g.clearRect(0, 0, W, H);
-      const pts = state.graph.slice(-300);
+      const c = $('chart'), dpr = window.devicePixelRatio || 1;
+      const w = c.clientWidth, h = c.clientHeight; if (!w || !h) return;
+      if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) { c.width = Math.round(w * dpr); c.height = Math.round(h * dpr); }
+      const g = c.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, h);
+      const css = getComputedStyle(document.body);
+      const now = Date.now(), pts = state.graph.filter(p => now - p[0] <= WINDOW_MS);
+      const top = niceMax(Math.max(0, ...pts.map(p => p[1])));
+      const padL = 34, padB = 18, padT = 6, plotW = w - padL, plotH = h - padB - padT;
+      const X = t => padL + (1 - (now - t) / WINDOW_MS) * plotW, Y = v => padT + plotH - v / top * plotH;
+      g.font = '11px system-ui,sans-serif'; g.fillStyle = css.getPropertyValue('--mut'); g.strokeStyle = css.getPropertyValue('--line'); g.lineWidth = 1;
+      g.textBaseline = 'middle'; g.textAlign = 'right';
+      for (const v of [0, top / 2, top]) { const y = Math.round(Y(v)) + .5; g.beginPath(); g.moveTo(padL, y); g.lineTo(w, y); g.stroke(); g.fillText(Math.round(v), padL - 6, y); }
+      g.textBaseline = 'alphabetic'; g.textAlign = 'left'; g.fillText('-2 min', padL, h - 3);
+      g.textAlign = 'right'; g.fillText('now', w, h - 3);
       if (pts.length < 2) return;
-      const maxP = Math.max(300, ...pts.map(p => p[0]));
-      const line = (idx, max, color) => {
-        g.strokeStyle = color; g.lineWidth = 3; g.beginPath();
-        pts.forEach((p, i) => { const x = i / (pts.length - 1) * W, y = H - 8 - p[idx] / max * (H - 16); i ? g.lineTo(x, y) : g.moveTo(x, y); });
-        g.stroke();
-      };
-      line(1, 160, '#3ecf8e'); line(0, maxP, '#4cc2ff');
+      const col = css.getPropertyValue('--pow').trim();
+      g.beginPath(); pts.forEach((p, i) => i ? g.lineTo(X(p[0]), Y(p[1])) : g.moveTo(X(p[0]), Y(p[1])));
+      g.lineTo(X(pts[pts.length - 1][0]), Y(0)); g.lineTo(X(pts[0][0]), Y(0)); g.closePath();
+      const grad = g.createLinearGradient(0, padT, 0, padT + plotH); grad.addColorStop(0, col + '55'); grad.addColorStop(1, col + '00');
+      g.fillStyle = grad; g.fill();
+      g.beginPath(); pts.forEach((p, i) => i ? g.lineTo(X(p[0]), Y(p[1])) : g.moveTo(X(p[0]), Y(p[1])));
+      g.strokeStyle = col; g.lineWidth = 2.5; g.lineJoin = 'round'; g.stroke();
     }
     setInterval(() => {
-      const p = currentPower(), cad = state.parser.current();
-      $('pw').textContent = connected() ? p : '–';
-      $('cd').textContent = connected() ? cad : '–';
+      const c = connected(), p = currentPower(), cad = state.parser.current();
+      $('pw').textContent = c ? p : '–';
+      $('cd').textContent = c ? cad : '–';
+      if (c) { state.graph.push([Date.now(), p]); if (state.graph.length > 400) state.graph.shift(); }
       if (state.recording) {
         $('el').textContent = fmtTime(state.timerMs + (state.paused ? 0 : Date.now() - state.lastTickMs));
-        const r = state.records, n = r.length;
-        if (n) {
-          $('a3').textContent = Math.round(r.slice(-3).reduce((a, b) => a + b.power, 0) / Math.min(3, n));
-          $('mx').textContent = Math.max(...r.map(x => x.power));
-          $('av').textContent = Math.round(r.reduce((a, b) => a + b.power, 0) / n);
-        }
-        $('info').textContent = `Samples recorded: ${n}. Blue = power, green = cadence.`;
-        state.graph.push([p, cad]);
-        draw();
-      }
+        let m = 0; for (const r of state.records) if (r.power > m) m = r.power;
+        $('mx').textContent = state.records.length ? m : '–';
+        $('info').textContent = '';
+      } else { $('el').textContent = '0:00'; $('mx').textContent = '–'; }
+      draw();
     }, 1000);
+    window.addEventListener('resize', draw);
 
     $('btnConnect').onclick = connectBle;
     $('btnSim').onclick = startSim;
     $('btnDisc').onclick = () => { if (state.recording && !confirm('Recording is running. Disconnect anyway?')) return; disconnect(); };
     $('btnStart').onclick = startRec;
     $('btnPause').onclick = togglePause;
-    $('btnStop').onclick = stopRec;
+    $('btnStop').onclick = () => { if (confirm('Stop and save this ride?')) stopRec(); };
     window.addEventListener('beforeunload', e => { if (state.recording) { e.preventDefault(); e.returnValue = ''; } });
     updateButtons();
     recoverDraft();
