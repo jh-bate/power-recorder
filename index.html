@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Power Recorder – BLE to FIT</title>
+<style>
+  :root { --bg:#14161a; --card:#1e2127; --fg:#e8eaed; --mut:#8b929c; --acc:#4cc2ff; --ok:#3ecf8e; --bad:#ff5d5d; }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:16px; background:var(--bg); color:var(--fg); font:15px/1.4 system-ui,sans-serif; max-width:760px; margin-inline:auto; }
+  h1 { font-size:18px; margin:0 0 4px; }
+  .sub { color:var(--mut); margin-bottom:14px; font-size:13px; }
+  .row { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:12px; }
+  button, select { background:var(--card); color:var(--fg); border:1px solid #333a44; border-radius:8px; padding:10px 14px; font-size:15px; cursor:pointer; }
+  button:hover:not(:disabled) { border-color:var(--acc); }
+  button:disabled { opacity:.4; cursor:default; }
+  button.primary { background:var(--acc); color:#04141f; border-color:var(--acc); font-weight:600; }
+  button.danger { background:var(--bad); color:#fff; border-color:var(--bad); }
+  .tiles { display:grid; grid-template-columns:repeat(2,1fr); gap:10px; margin-bottom:12px; }
+  @media (min-width:560px){ .tiles { grid-template-columns:repeat(3,1fr); } }
+  .tile { background:var(--card); border-radius:12px; padding:12px 14px; }
+  .tile .l { color:var(--mut); font-size:12px; text-transform:uppercase; letter-spacing:.05em; }
+  .tile .v { font-size:40px; font-weight:700; font-variant-numeric:tabular-nums; }
+  .tile .u { font-size:14px; color:var(--mut); font-weight:400; margin-left:4px; }
+  .status { padding:8px 12px; border-radius:8px; background:var(--card); margin-bottom:12px; font-size:14px; }
+  .dot { display:inline-block; width:10px; height:10px; border-radius:50%; background:var(--mut); margin-right:8px; }
+  .dot.on { background:var(--ok); } .dot.rec { background:var(--bad); animation:p 1s infinite; }
+  @keyframes p { 50% { opacity:.3; } }
+  canvas { width:100%; height:140px; background:var(--card); border-radius:12px; display:block; margin-bottom:12px; }
+  .note { color:var(--mut); font-size:12.5px; }
+  label { color:var(--mut); font-size:13px; }
+</style>
+</head>
+<body>
+<h1>Power Recorder</h1>
+<div class="sub">Bluetooth power meter → 1 Hz recording → Garmin‑compatible .FIT file</div>
+
+<div class="status"><span class="dot" id="dot"></span><span id="status">Not connected</span></div>
+
+<div class="row">
+  <button id="btnConnect" class="primary">Connect power meter (BLE)</button>
+  <button id="btnSim">Simulate sensor</button>
+  <button id="btnDisc" disabled>Disconnect</button>
+</div>
+
+<div class="tiles">
+  <div class="tile"><div class="l">Power</div><div class="v"><span id="pw">–</span><span class="u">W</span></div></div>
+  <div class="tile"><div class="l">Cadence</div><div class="v"><span id="cd">–</span><span class="u">rpm</span></div></div>
+  <div class="tile"><div class="l">Elapsed</div><div class="v" id="el">0:00</div></div>
+  <div class="tile"><div class="l">3 s avg</div><div class="v"><span id="a3">–</span><span class="u">W</span></div></div>
+  <div class="tile"><div class="l">Max power</div><div class="v"><span id="mx">–</span><span class="u">W</span></div></div>
+  <div class="tile"><div class="l">Avg power</div><div class="v"><span id="av">–</span><span class="u">W</span></div></div>
+</div>
+
+<canvas id="chart" width="1400" height="280"></canvas>
+
+<div class="row">
+  <button id="btnStart" disabled class="primary">Start</button>
+  <button id="btnPause" disabled>Pause</button>
+  <button id="btnStop" disabled class="danger">Stop &amp; export .FIT</button>
+</div>
+<div class="row">
+  <label for="sport">Activity type in Garmin Connect:&nbsp;</label>
+  <select id="sport">
+    <option value="2,13">Track cycling</option>
+    <option value="2,6">Indoor cycling</option>
+    <option value="2,0">Cycling (generic)</option>
+  </select>
+</div>
+<div class="note" id="info">Samples recorded: 0. Use Chrome or Edge (desktop or Android). Web Bluetooth is not available in Safari/iOS or Firefox.</div>
+
+<script>
+// ============================================================
+// FIT encoder  (==FIT-START==)
+// ============================================================
+const FIT_EPOCH_OFFSET = 631065600; // seconds between Unix epoch and FIT epoch (1989-12-31)
+const BT = { ENUM:0x00, U8:0x02, U16:0x84, U32:0x86, U32Z:0x8C };
+const BT_SIZE = { [BT.ENUM]:1, [BT.U8]:1, [BT.U16]:2, [BT.U32]:4, [BT.U32Z]:4 };
+
+function fitCrc16(bytes, crc = 0) {
+  const T = [0x0000,0xCC01,0x1840,0xD401,0x3080,0xFC81,0x28C0,0xE4C1,0x6100,0xAD01,0x79C0,0xB5C1,0x5180,0x9D81,0x4940,0x8541];
+  for (const b of bytes) {
+    let tmp = T[crc & 0xF];
+    crc = (crc >> 4) & 0x0FFF; crc = crc ^ tmp ^ T[b & 0xF];
+    tmp = T[crc & 0xF];
+    crc = (crc >> 4) & 0x0FFF; crc = crc ^ tmp ^ T[(b >> 4) & 0xF];
+  }
+  return crc;
+}
+const toFitTime = ms => Math.round(ms / 1000) - FIT_EPOCH_OFFSET;
+
+/**
+ * records: [{t: unixMs, power: W, cadence: rpm}]
+ * events:  [{t: unixMs, type: 'stop'|'start'}]  (pause / resume, in time order)
+ * sport/subSport: FIT enums (cycling = 2; track_cycling = 13, indoor_cycling = 6)
+ */
+function buildFit({ records, events = [], startMs, endMs, timerMs, sport = 2, subSport = 13 }) {
+  const body = [];
+  const u8  = v => body.push(v & 0xFF);
+  const u16 = v => { body.push(v & 0xFF, (v >> 8) & 0xFF); };
+  const u32 = v => { v = v >>> 0; body.push(v & 0xFF, (v >>> 8) & 0xFF, (v >>> 16) & 0xFF, (v >>> 24) & 0xFF); };
+  const put = (type, v) => { if (BT_SIZE[type] === 1) u8(v); else if (BT_SIZE[type] === 2) u16(v); else u32(v); };
+
+  // a message definition = [localType, globalMsgNum, [[fieldNum, baseType], ...]]
+  const defs = {};
+  function define(local, global, fields) {
+    defs[local] = fields;
+    u8(0x40 | local); u8(0); u8(0); u16(global); u8(fields.length);
+    for (const [num, type] of fields) { u8(num); u8(BT_SIZE[type]); u8(type); }
+  }
+  function data(local, values) {
+    u8(local);
+    defs[local].forEach(([, type], i) => put(type, values[i]));
+  }
+
+  const L = { FILE_ID:0, EVENT:1, RECORD:2, LAP:3, SESSION:4, ACTIVITY:5 };
+
+  // ---- stats ----
+  const n = records.length;
+  const pw = records.map(r => r.power);
+  const cd = records.map(r => r.cadence).filter(c => c > 0);
+  const avgPower = n ? Math.round(pw.reduce((a, b) => a + b, 0) / n) : 0;
+  const maxPower = n ? Math.max(...pw) : 0;
+  const avgCad = cd.length ? Math.round(cd.reduce((a, b) => a + b, 0) / cd.length) : 0;
+  const maxCad = cd.length ? Math.max(...cd) : 0;
+  const elapsedMs = Math.max(0, endMs - startMs);
+  const tMs = timerMs ?? elapsedMs;
+  const startT = toFitTime(startMs), endT = toFitTime(endMs);
+
+  // ---- file_id ----
+  define(L.FILE_ID, 0, [[0, BT.ENUM], [1, BT.U16], [2, BT.U16], [3, BT.U32Z], [4, BT.U32]]);
+  data(L.FILE_ID, [4 /*activity*/, 255 /*development*/, 0, 1, startT]);
+
+  // ---- events + records, merged in time order ----
+  define(L.EVENT, 21, [[253, BT.U32], [0, BT.ENUM], [1, BT.ENUM]]);
+  define(L.RECORD, 20, [[253, BT.U32], [7, BT.U16], [3, BT.U8]]);
+  data(L.EVENT, [startT, 0 /*timer*/, 0 /*start*/]);
+  let ei = 0;
+  for (const r of records) {
+    while (ei < events.length && events[ei].t <= r.t) {
+      data(L.EVENT, [toFitTime(events[ei].t), 0, events[ei].type === 'stop' ? 4 : 0]); ei++;
+    }
+    data(L.RECORD, [toFitTime(r.t), Math.max(0, Math.min(0xFFFE, Math.round(r.power))), Math.max(0, Math.min(254, Math.round(r.cadence)))]);
+  }
+  while (ei < events.length) { data(L.EVENT, [toFitTime(events[ei].t), 0, events[ei].type === 'stop' ? 4 : 0]); ei++; }
+  data(L.EVENT, [endT, 0, 4 /*stop_all*/]);
+
+  // ---- lap ----
+  define(L.LAP, 19, [[253, BT.U32], [2, BT.U32], [7, BT.U32], [8, BT.U32], [17, BT.U8], [18, BT.U8],
+                     [19, BT.U16], [20, BT.U16], [0, BT.ENUM], [1, BT.ENUM], [25, BT.ENUM], [39, BT.ENUM], [254, BT.U16]]);
+  data(L.LAP, [endT, startT, elapsedMs, tMs, avgCad, maxCad, avgPower, maxPower, 9 /*lap*/, 1 /*stop*/, sport, subSport, 0]);
+
+  // ---- session ----
+  define(L.SESSION, 18, [[253, BT.U32], [2, BT.U32], [7, BT.U32], [8, BT.U32], [18, BT.U8], [19, BT.U8],
+                         [20, BT.U16], [21, BT.U16], [5, BT.ENUM], [6, BT.ENUM], [25, BT.U16], [26, BT.U16],
+                         [0, BT.ENUM], [1, BT.ENUM], [254, BT.U16]]);
+  data(L.SESSION, [endT, startT, elapsedMs, tMs, avgCad, maxCad, avgPower, maxPower, sport, subSport, 0, 1, 8 /*session*/, 1, 0]);
+
+  // ---- activity ----
+  define(L.ACTIVITY, 34, [[253, BT.U32], [0, BT.U32], [1, BT.U16], [2, BT.ENUM], [3, BT.ENUM], [4, BT.ENUM]]);
+  data(L.ACTIVITY, [endT, tMs, 1, 0 /*manual*/, 26 /*activity*/, 1 /*stop*/]);
+
+  // ---- header + CRCs ----
+  const hdr = [];
+  const h8 = v => hdr.push(v & 0xFF);
+  const h16 = v => hdr.push(v & 0xFF, (v >> 8) & 0xFF);
+  const h32 = v => hdr.push(v & 0xFF, (v >>> 8) & 0xFF, (v >>> 16) & 0xFF, (v >>> 24) & 0xFF);
+  h8(14); h8(0x20); h16(2132); h32(body.length);
+  hdr.push(0x2E, 0x46, 0x49, 0x54); // ".FIT"
+  h16(fitCrc16(hdr));
+  const all = hdr.concat(body);
+  const crc = fitCrc16(all);
+  all.push(crc & 0xFF, (crc >> 8) & 0xFF);
+  return new Uint8Array(all);
+}
+
+// ============================================================
+// Cycling Power Measurement (0x2A63) parser
+// ============================================================
+class CpsParser {
+  constructor() { this.prev = null; this.cadence = 0; this.lastCrankChange = 0; }
+  parse(dv, now = Date.now()) {
+    const flags = dv.getUint16(0, true);
+    const power = dv.getInt16(2, true);
+    let o = 4;
+    if (flags & 0x01) o += 1;   // pedal power balance
+    if (flags & 0x04) o += 2;   // accumulated torque
+    if (flags & 0x10) o += 6;   // wheel revolution data
+    if (flags & 0x20 && dv.byteLength >= o + 4) {   // crank revolution data
+      const revs = dv.getUint16(o, true), time = dv.getUint16(o + 2, true); // time: 1/1024 s
+      if (this.prev) {
+        const dR = (revs - this.prev.revs) & 0xFFFF;
+        const dT = (time - this.prev.time) & 0xFFFF;
+        if (dT > 0) {
+          const rpm = dR * 60 * 1024 / dT;
+          if (rpm < 250) this.cadence = Math.round(rpm);
+          this.lastCrankChange = now;
+          this.prev = { revs, time };
+        }
+      } else { this.prev = { revs, time }; this.lastCrankChange = now; }
+    }
+    return { power: Math.max(0, power), hasCrank: !!(flags & 0x20) };
+  }
+  current(now = Date.now()) {
+    // no new crank event for 2.5 s → coasting / stopped
+    return now - this.lastCrankChange > 2500 ? 0 : this.cadence;
+  }
+}
+// ==FIT-END==
+
+// ============================================================
+// App
+// ============================================================
+const $ = id => document.getElementById(id);
+const state = {
+  device: null, char: null, sim: null, simTimer: null,
+  parser: new CpsParser(), livePower: 0, lastPowerAt: 0,
+  recording: false, paused: false,
+  records: [], events: [], startMs: 0, timerMs: 0, lastTickMs: 0,
+  tickTimer: null, wakeLock: null, graph: []
+};
+
+function setStatus(text, cls) {
+  $('status').textContent = text;
+  $('dot').className = 'dot' + (cls ? ' ' + cls : '');
+}
+function fmtTime(ms) {
+  const s = Math.floor(ms / 1000), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), ss = s % 60;
+  return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(ss).padStart(2, '0');
+}
+function currentPower() { return Date.now() - state.lastPowerAt > 3000 ? 0 : state.livePower; }
+function connected() { return !!(state.char || state.sim); }
+
+function updateButtons() {
+  const c = connected();
+  $('btnConnect').disabled = c; $('btnSim').disabled = c; $('btnDisc').disabled = !c;
+  $('btnStart').disabled = !c || state.recording;
+  $('btnPause').disabled = !state.recording;
+  $('btnStop').disabled = !state.recording;
+  $('btnPause').textContent = state.paused ? 'Resume' : 'Pause';
+}
+
+// ---- Bluetooth ----
+async function connectBle() {
+  if (!navigator.bluetooth) { alert('Web Bluetooth is not available in this browser. Use Chrome or Edge on desktop/Android.'); return; }
+  try {
+    setStatus('Choose your power meter…');
+    const dev = await navigator.bluetooth.requestDevice({ filters: [{ services: ['cycling_power'] }] });
+    state.device = dev;
+    dev.addEventListener('gattserverdisconnected', onBleDisconnect);
+    await attach(dev);
+  } catch (e) { setStatus('Not connected' + (e.name !== 'NotFoundError' ? ' (' + e.message + ')' : '')); }
+}
+async function attach(dev) {
+  setStatus('Connecting to ' + (dev.name || 'sensor') + '…');
+  const server = await dev.gatt.connect();
+  const svc = await server.getPrimaryService('cycling_power');
+  const ch = await svc.getCharacteristic('cycling_power_measurement');
+  state.parser = new CpsParser();
+  ch.addEventListener('characteristicvaluechanged', ev => {
+    const r = state.parser.parse(ev.target.value);
+    state.livePower = r.power; state.lastPowerAt = Date.now();
+  });
+  await ch.startNotifications();
+  state.char = ch;
+  setStatus('Connected: ' + (dev.name || 'power meter'), 'on');
+  updateButtons();
+}
+async function onBleDisconnect() {
+  state.char = null; updateButtons();
+  setStatus('Sensor disconnected' + (state.recording ? ' – recording continues with 0 W, reconnecting…' : '…'));
+  for (let i = 0; i < 10 && state.device && !state.char; i++) {
+    try { await new Promise(r => setTimeout(r, 1500)); await attach(state.device); return; } catch (_) {}
+  }
+  if (!state.char) setStatus('Sensor lost. Press Disconnect, then connect again.');
+}
+function disconnect() {
+  const d = state.device; state.device = null;
+  if (d && d.gatt.connected) d.removeEventListener('gattserverdisconnected', onBleDisconnect), d.gatt.disconnect();
+  state.char = null;
+  if (state.simTimer) { clearInterval(state.simTimer); state.simTimer = null; state.sim = null; }
+  state.livePower = 0; state.parser = new CpsParser();
+  setStatus('Not connected'); updateButtons();
+}
+
+// ---- Simulator (for testing without hardware) ----
+function startSim() {
+  state.sim = true; const t0 = Date.now();
+  state.simTimer = setInterval(() => {
+    const t = (Date.now() - t0) / 1000;
+    state.livePower = Math.max(0, Math.round(220 + 140 * Math.sin(t / 9) + (Math.random() - .5) * 30));
+    state.lastPowerAt = Date.now();
+    state.parser.cadence = Math.round(95 + 12 * Math.sin(t / 6));
+    state.parser.lastCrankChange = Date.now();
+  }, 250);
+  setStatus('Simulated sensor running', 'on'); updateButtons();
+}
+
+// ---- Recording ----
+async function startRec() {
+  Object.assign(state, { recording: true, paused: false, records: [], events: [], graph: [],
+    startMs: Date.now(), timerMs: 0, lastTickMs: Date.now() });
+  try { state.wakeLock = await navigator.wakeLock?.request('screen'); } catch (_) {}
+  state.tickTimer = setInterval(tick, 1000);
+  setStatus('Recording', 'rec'); updateButtons();
+}
+function tick() {
+  const now = Date.now();
+  if (!state.paused) {
+    state.timerMs += now - state.lastTickMs;
+    state.records.push({ t: now, power: currentPower(), cadence: state.parser.current(now) });
+  }
+  state.lastTickMs = now;
+}
+function togglePause() {
+  const now = Date.now();
+  if (!state.paused) { tick(); state.paused = true; state.events.push({ t: now, type: 'stop' }); setStatus('Paused', 'on'); }
+  else { state.paused = false; state.lastTickMs = now; state.events.push({ t: now, type: 'start' }); setStatus('Recording', 'rec'); }
+  updateButtons();
+}
+function stopRec() {
+  tick();
+  clearInterval(state.tickTimer); state.tickTimer = null;
+  state.wakeLock?.release?.().catch(() => {}); state.wakeLock = null;
+  const endMs = Date.now();
+  state.recording = false; state.paused = false;
+  setStatus(connected() ? 'Connected' : 'Not connected', connected() ? 'on' : '');
+  updateButtons();
+  if (state.records.length < 2) { alert('Recording too short to export.'); return; }
+  const [sport, subSport] = $('sport').value.split(',').map(Number);
+  const bytes = buildFit({ records: state.records, events: state.events, startMs: state.startMs, endMs, timerMs: state.timerMs, sport, subSport });
+  const d = new Date(state.startMs), p = n => String(n).padStart(2, '0');
+  const name = `ride-${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}.fit`;
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }));
+  a.download = name; document.body.appendChild(a); a.click(); a.remove();
+  $('info').textContent = `Exported ${name} – ${state.records.length} samples, ${(bytes.length/1024).toFixed(1)} KB. Upload at connect.garmin.com → Upload.`;
+}
+
+// ---- UI refresh ----
+function draw() {
+  const c = $('chart'), g = c.getContext('2d'), W = c.width, H = c.height;
+  g.clearRect(0, 0, W, H);
+  const pts = state.graph.slice(-300);
+  if (pts.length < 2) return;
+  const maxP = Math.max(300, ...pts.map(p => p[0]));
+  const line = (idx, max, color) => {
+    g.strokeStyle = color; g.lineWidth = 3; g.beginPath();
+    pts.forEach((p, i) => { const x = i / (pts.length - 1) * W, y = H - 8 - p[idx] / max * (H - 16); i ? g.lineTo(x, y) : g.moveTo(x, y); });
+    g.stroke();
+  };
+  line(1, 160, '#3ecf8e'); line(0, maxP, '#4cc2ff');
+}
+setInterval(() => {
+  const p = currentPower(), cad = state.parser.current();
+  $('pw').textContent = connected() ? p : '–';
+  $('cd').textContent = connected() ? cad : '–';
+  if (state.recording) {
+    $('el').textContent = fmtTime(state.timerMs + (state.paused ? 0 : Date.now() - state.lastTickMs));
+    const r = state.records, n = r.length;
+    if (n) {
+      $('a3').textContent = Math.round(r.slice(-3).reduce((a, b) => a + b.power, 0) / Math.min(3, n));
+      $('mx').textContent = Math.max(...r.map(x => x.power));
+      $('av').textContent = Math.round(r.reduce((a, b) => a + b.power, 0) / n);
+    }
+    $('info').textContent = `Samples recorded: ${n}. Blue = power, green = cadence.`;
+    state.graph.push([p, cad]);
+    draw();
+  }
+}, 1000);
+
+$('btnConnect').onclick = connectBle;
+$('btnSim').onclick = startSim;
+$('btnDisc').onclick = () => { if (state.recording && !confirm('Recording is running. Disconnect anyway?')) return; disconnect(); };
+$('btnStart').onclick = startRec;
+$('btnPause').onclick = togglePause;
+$('btnStop').onclick = stopRec;
+window.addEventListener('beforeunload', e => { if (state.recording) { e.preventDefault(); e.returnValue = ''; } });
+updateButtons();
+</script>
+</body>
+</html>
